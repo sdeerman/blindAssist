@@ -26,8 +26,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
+        super.onCreate(savedInstanceState); EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -38,9 +37,14 @@ public class MainActivity extends AppCompatActivity {
         requestBasicPermissions();
         initCoreManagers();
         setupFeatureWheel();
-        
-        // 初始进入播报
-        VoiceManager.getInstance().speak("欢迎使用随行助手。请上下滑动屏幕选择功能，双击进入。");
+
+        // 精心编排启动语音：先播报欢迎语，完成后再播报当前功能
+        VoiceManager.getInstance().speakImmediate("欢迎使用随行助手。请上下滑动屏幕选择功能，双击进入。", () -> {
+            if (featureWheelView != null) {
+                // 使用常规 speak，加入到欢迎语之后的队列
+                VoiceManager.getInstance().speak(featureWheelView.getCurrentFeature().getDescription());
+            }
+        });
     }
 
     private void requestBasicPermissions() {
