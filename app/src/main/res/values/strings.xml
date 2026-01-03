@@ -3,4 +3,7 @@
 
     <!-- 无障碍友好的文本描述 -->
     <string name="feature_wheel_desc">功能轮盘：通过滑动选择导航、避障、问答、文字识别和场景描述功能</string>
+
+    <!-- AutoGLM Accessibility Service -->
+    <string name="accessibility_service_description">AutoGLM自动化控制服务，用于执行服务器下发的SDK指令</string>
 </resources>
