@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -99,15 +100,89 @@ public class MainActivity extends AppCompatActivity {
                     voiceButton.startAnimation(pressAnim);
 
                     // 检查语音识别是否可用
-                    if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                    boolean isRecognitionAvailable = SpeechRecognizer.isRecognitionAvailable(this);
+                    Log.d(TAG, "Speech recognition available: " + isRecognitionAvailable);
+
+                    if (!isRecognitionAvailable) {
+                        // Try to get more detailed information about why it's not available
+                        try {
+                            PackageManager pm = getPackageManager();
+                            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                            java.util.List<android.content.pm.ResolveInfo> activities = pm.queryIntentActivities(intent, PackageManager.MATCH_ALL);
+
+                            Log.d(TAG, "Found " + activities.size() + " speech recognition activities");
+                            for (android.content.pm.ResolveInfo info : activities) {
+                                Log.d(TAG, "Activity: " + info.activityInfo.packageName + "/" + info.activityInfo.name);
+                            }
+
+                            if (activities.isEmpty()) {
+                                Log.e(TAG, "No speech recognition activities found");
+                                statusText.setText("未找到语音识别服务");
+
+                                // Check for specific Chinese OEM services
+                                boolean hasChineseService = false;
+                                String[] chinesePackages = {
+                                    "com.iflytek.speechsuite",
+                                    "com.baidu.input",
+                                    "com.xiaomi.voiceassistant",
+                                    "com.coloros.voiceservice",
+                                    "com.miui.voiceassist"
+                                };
+
+                                for (String pkg : chinesePackages) {
+                                    try {
+                                        pm.getPackageInfo(pkg, 0);
+                                        hasChineseService = true;
+                                        Log.d(TAG, "Found Chinese speech service: " + pkg);
+                                        break;
+                                    } catch (PackageManager.NameNotFoundException e) {
+                                        // Package not installed
+                                    }
+                                }
+
+                                if (hasChineseService) {
+                                    // Provide more specific guidance based on detected service
+                                    String guidance = "检测到语音服务但无法使用，请在系统设置中启用语音输入功能";
+                                    for (String pkg : chinesePackages) {
+                                        try {
+                                            pm.getPackageInfo(pkg, 0);
+                                            if (pkg.contains("baidu")) {
+                                                guidance = "检测到百度输入法，请在设置中将百度输入法设为默认语音输入引擎";
+                                            } else if (pkg.contains("iflytek")) {
+                                                guidance = "检测到讯飞输入法，请在设置中将讯飞输入法设为默认语音输入引擎";
+                                            } else if (pkg.contains("xiaomi") || pkg.contains("miui")) {
+                                                guidance = "检测到小米语音服务，请在MIUI设置中启用语音助手";
+                                            } else if (pkg.contains("coloros")) {
+                                                guidance = "检测到OPPO语音服务，请在ColorOS设置中启用语音输入";
+                                            }
+                                            break;
+                                        } catch (PackageManager.NameNotFoundException e) {
+                                            // Continue to next package
+                                        }
+                                    }
+                                    VoiceManager.getInstance().speak(guidance);
+                                } else {
+                                    VoiceManager.getInstance().speak("设备上没有安装语音识别服务，请安装讯飞输入法、百度输入法或其他语音识别应用");
+                                }
+                            } else {
+                                Log.e(TAG, "Speech recognition activities found but isRecognitionAvailable returned false");
+                                statusText.setText("语音识别服务不可用");
+                                VoiceManager.getInstance().speak("语音识别服务当前不可用，请检查设备的语音输入设置");
+                            }
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error checking speech recognition availability", e);
+                            statusText.setText("语音识别初始化失败");
+                            VoiceManager.getInstance().speak("语音识别功能初始化失败");
+                        }
                         showTextInputDialog();
                         return true;
                     }
 
-                    voiceButton.setText("正在听...");
+                    voiceButton.setText("松开结束");
                     voiceButton.setBackground(getDrawable(R.drawable.btn_speak_background));
                     statusText.setText("请说话...");
 
+                    // Start continuous listening
                     currentVoiceCallback = new VoiceManager.VoiceCallback() {
                         @Override
                         public void onResult(String text) {
@@ -119,6 +194,12 @@ public class MainActivity extends AppCompatActivity {
                         }
 
                         @Override
+                        public void onPartialResult(String partialText) {
+                            // Update status with partial result for better UX
+                            statusText.setText("正在听: " + partialText);
+                        }
+
+                        @Override
                         public void onError(String error) {
                             voiceButton.setText("按住说话");
                             voiceButton.setBackground(getDrawable(R.drawable.btn_speak_material));
@@ -127,7 +208,7 @@ public class MainActivity extends AppCompatActivity {
                             VoiceManager.getInstance().speak("没有听到声音，请重试");
                         }
                     };
-                    VoiceManager.getInstance().startListening(currentVoiceCallback);
+                    VoiceManager.getInstance().startContinuousListening(currentVoiceCallback);
                     v.performClick();
                     break;
 
@@ -135,6 +216,19 @@ public class MainActivity extends AppCompatActivity {
                     // 播放释放动画
                     Animation releaseAnim = AnimationUtils.loadAnimation(this, R.anim.button_release);
                     voiceButton.startAnimation(releaseAnim);
+
+                    // Request stop with 0.5s debounce
+                    voiceButton.setText("松开中...");
+                    VoiceManager.getInstance().requestStopWithDebounce();
+                    break;
+
+                case MotionEvent.ACTION_CANCEL:
+                    // Handle touch cancellation (e.g., user slides finger away)
+                    voiceButton.setText("按住说话");
+                    voiceButton.setBackground(getDrawable(R.drawable.btn_speak_material));
+                    VoiceManager.getInstance().stopListening();
+                    currentVoiceCallback = null;
+                    statusText.setText("已取消");
                     break;
             }
             return true;

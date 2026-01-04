@@ -87,6 +87,11 @@ public class FeatureRouter {
                 }
 
                 @Override
+                public void onPartialResult(String partialText) {
+                    // Ignore partial results for feature routing
+                }
+
+                @Override
                 public void onError(String error) {
                     voiceManager.speak("没有听到您的声音，已退出导航模式。");
                 }
@@ -146,6 +151,11 @@ public class FeatureRouter {
                 @Override
                 public void onResult(String text) {
                     askQuestionToServer(text);
+                }
+
+                @Override
+                public void onPartialResult(String partialText) {
+                    // Ignore partial results for feature routing
                 }
 
                 @Override

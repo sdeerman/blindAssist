@@ -60,11 +60,25 @@ public class VoiceManager {
             mainHandler.post(() -> initTtsWithFallback(context));
         }
 
-        if (speechRecognizer == null && SpeechRecognizer.isRecognitionAvailable(context)) {
-            mainHandler.post(() -> {
-                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
-                speechRecognizer.setRecognitionListener(recognitionListener);
-            });
+        if (speechRecognizer == null) {
+            boolean isAvailable = SpeechRecognizer.isRecognitionAvailable(context);
+            Log.d(TAG, "Speech recognition availability check: " + isAvailable);
+
+            if (isAvailable) {
+                mainHandler.post(() -> {
+                    try {
+                        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
+                        speechRecognizer.setRecognitionListener(recognitionListener);
+                        Log.d(TAG, "SpeechRecognizer created successfully");
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to create SpeechRecognizer", e);
+                        // Speech recognizer will remain null, and we'll fall back to text input
+                    }
+                });
+            } else {
+                Log.w(TAG, "Speech recognition is not available on this device");
+                // We'll rely on the text input fallback in MainActivity
+            }
         }
     }
 
@@ -291,14 +305,8 @@ public class VoiceManager {
     }
 
 
-    // ASR (Speech-to-Text) Section
-    public interface VoiceCallback {
-        void onResult(String text);
-
-        void onError(String error);
-    }
-
     public void startListening(VoiceCallback callback) {
+        // For backward compatibility with existing code that doesn't need continuous listening
         if (speechRecognizer == null) {
             Log.e(TAG, "SpeechRecognizer not available.");
             if (callback != null) mainHandler.post(() -> callback.onError("语音识别服务不可用。"));
@@ -316,6 +324,83 @@ public class VoiceManager {
         });
     }
 
+    // ASR (Speech-to-Text) Section
+    public interface VoiceCallback {
+        void onResult(String text);
+        void onPartialResult(String partialText);
+        void onError(String error);
+    }
+
+    private boolean isListening = false;
+    private boolean shouldStopAfterDebounce = false;
+    private Runnable stopListeningRunnable;
+
+    public void startContinuousListening(VoiceCallback callback) {
+        if (speechRecognizer == null) {
+            Log.e(TAG, "SpeechRecognizer not available.");
+            if (callback != null) mainHandler.post(() -> callback.onError("语音识别服务不可用。"));
+            return;
+        }
+
+        if (isListening) {
+            Log.w(TAG, "Already listening, stopping previous session");
+            stopListening();
+        }
+
+        this.currentVoiceCallback = callback;
+        this.isListening = true;
+        this.shouldStopAfterDebounce = false;
+
+        mainHandler.post(() -> {
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.CHINA.toString());
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true); // Enable partial results
+            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+            speechRecognizer.startListening(intent);
+            Log.d(TAG, "startContinuousListening... 开始连续语音识别。");
+        });
+    }
+
+    public void requestStopWithDebounce() {
+        if (!isListening) {
+            return;
+        }
+
+        shouldStopAfterDebounce = true;
+        Log.d(TAG, "Requesting stop with 0.5s debounce");
+
+        // Cancel any existing stop runnable
+        if (stopListeningRunnable != null) {
+            mainHandler.removeCallbacks(stopListeningRunnable);
+        }
+
+        // Schedule stop after 0.5 seconds
+        stopListeningRunnable = () -> {
+            if (shouldStopAfterDebounce) {
+                stopListening();
+            }
+        };
+        mainHandler.postDelayed(stopListeningRunnable, 500);
+    }
+
+    public void stopListening() {
+        if (!isListening || speechRecognizer == null) {
+            return;
+        }
+
+        Log.d(TAG, "Stopping speech recognition");
+        mainHandler.post(() -> {
+            speechRecognizer.stopListening();
+            isListening = false;
+            shouldStopAfterDebounce = false;
+            if (stopListeningRunnable != null) {
+                mainHandler.removeCallbacks(stopListeningRunnable);
+                stopListeningRunnable = null;
+            }
+        });
+    }
+
     private final RecognitionListener recognitionListener = new RecognitionListener() {
         @Override
         public void onReadyForSpeech(Bundle params) {
@@ -329,6 +414,7 @@ public class VoiceManager {
 
         @Override
         public void onRmsChanged(float rmsdB) {
+            // Can be used to show volume level if needed
         }
 
         @Override
@@ -338,12 +424,20 @@ public class VoiceManager {
         @Override
         public void onEndOfSpeech() {
             Log.d(TAG, "ASR: onEndOfSpeech");
+            // Don't stop listening here for continuous mode
+            // The stop will be handled by requestStopWithDebounce or manual stop
         }
 
         @Override
         public void onError(int error) {
             String errorMsg = getErrorText(error);
             Log.e(TAG, "ASR Error: " + errorMsg);
+            isListening = false;
+            shouldStopAfterDebounce = false;
+            if (stopListeningRunnable != null) {
+                mainHandler.removeCallbacks(stopListeningRunnable);
+                stopListeningRunnable = null;
+            }
             if (currentVoiceCallback != null) {
                 currentVoiceCallback.onError(errorMsg);
                 currentVoiceCallback = null;
@@ -365,10 +459,24 @@ public class VoiceManager {
                 }
             }
             currentVoiceCallback = null;
+            isListening = false;
+            shouldStopAfterDebounce = false;
+            if (stopListeningRunnable != null) {
+                mainHandler.removeCallbacks(stopListeningRunnable);
+                stopListeningRunnable = null;
+            }
         }
 
         @Override
         public void onPartialResults(Bundle partialResults) {
+            ArrayList<String> matches = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            if (matches != null && !matches.isEmpty()) {
+                String partialText = matches.get(0);
+                Log.d(TAG, "ASR Partial Result: " + partialText);
+                if (currentVoiceCallback != null) {
+                    currentVoiceCallback.onPartialResult(partialText);
+                }
+            }
         }
 
         @Override
